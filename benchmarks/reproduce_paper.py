@@ -6,11 +6,11 @@ This script reproduces the 5-fold cross-validation benchmarks presented in:
 
 Prerequisites:
 1. Install tgalign: `pip install .` (from the repo root)
-2. Ensure internet access (for downloading NCBI/Greengenes data)
-3. Run from repo root: `python benchmarks/reproduce_paper.py`
+2. Run from repo root: `python benchmarks/reproduce_paper.py`
 
-Author: Justin Boone
-Date: Nov 2025
+Data Source:
+All datasets are permanently archived on Zenodo (DOI: 10.5281/zenodo.17973054)
+to ensure exact reproducibility of the results.
 """
 
 import gzip
@@ -39,7 +39,6 @@ from sklearn.metrics import accuracy_score, f1_score
 # LIBRARY IMPORTS & SETUP
 # =============================================================================
 
-# Attempt to import the installed package
 try:
     from tgalign import TGAlignIndex
     print("SUCCESS: TGAlign library loaded.")
@@ -76,7 +75,7 @@ def run_command(command: str):
     subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL)
 
 # =============================================================================
-# DATA HELPERS (NCBI, TAXONOMY, PCR)
+# DATA HELPERS
 # =============================================================================
 
 @dataclass
@@ -86,14 +85,12 @@ class BenchmarkCase:
     max_len: int
     archive_path: str
     tax_parser: Callable[[str], Tuple[str, str]]
+    url: str  # Mandatory now (Zenodo)
     prep_method: str = 'filter'
-    url: Optional[str] = None
     fasta_path_in_archive: Optional[str] = None
     taxonomy_path_in_archive: Optional[str] = None
     fwd_primer: Optional[str] = None
     rev_primer: Optional[str] = None
-    ncbi_query: Optional[str] = None
-    retmax: int = 10000
     usearch_id: float = 0.97
     is_balanced_10: bool = False
 
@@ -150,33 +147,6 @@ def read_fasta(file_path: str) -> Dict[str, str]:
         if header: sequences["".join(current_seq)] = header
     return {v: k for k, v in sequences.items() if k and v}
 
-def prepare_ncbi_dataset(query: str, retmax: int, output_fasta: str) -> None:
-    base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-    print(f"    -> Querying NCBI: {query[:50]}...")
-    esearch_params = {'db': 'nuccore', 'term': query, 'retmax': retmax, 'usehistory': 'y'}
-    resp = requests.get(f"{base}/esearch.fcgi", params=esearch_params)
-    resp.raise_for_status()
-
-    try:
-        webenv = re.search(r'<WebEnv>([^<]+)</WebEnv>', resp.text).group(1)
-        qk = re.search(r'<QueryKey>(\d+)</QueryKey>', resp.text).group(1)
-        count = int(re.search(r'<Count>(\d+)</Count>', resp.text).group(1))
-    except AttributeError:
-        raise RuntimeError("Failed to parse NCBI ESearch response.")
-
-    print(f"    -> Downloading {min(retmax, count)} sequences...")
-    with open(output_fasta, "wb") as f:
-        for retstart in range(0, min(retmax, count), 500):
-            efetch_params = {
-                'db': 'nuccore', 'query_key': qk, 'WebEnv': webenv,
-                'rettype': 'fasta', 'retmode': 'text',
-                'retstart': retstart, 'retmax': 500
-            }
-            resp = requests.get(f"{base}/efetch.fcgi", params=efetch_params)
-            resp.raise_for_status()
-            f.write(resp.content)
-            time.sleep(0.34)
-
 def insilico_pcr(sequences: Dict[str, str], fwd_primer: str, rev_primer: str) -> Dict[str, str]:
     print("    -> Performing in-silico PCR...")
     fragments = {}
@@ -196,36 +166,27 @@ def insilico_pcr(sequences: Dict[str, str], fwd_primer: str, rev_primer: str) ->
 def get_dataset_arrays(case: BenchmarkCase) -> Tuple[np.ndarray, np.ndarray]:
     print(f"\n--- [Data Prep] {case.name} ---")
     
-    # Ensure data directory exists
     os.makedirs("data_cache", exist_ok=True)
     local_archive = os.path.join("data_cache", case.archive_path)
 
-    # 1. Acquire Data
-    fasta_to_read = local_archive
-    if case.fasta_path_in_archive:
-        # If it's a tarball, we need to know the internal path. 
-        # For simplicity in this script, we check if extracted file exists.
-        extracted_path = os.path.join("data_cache", case.fasta_path_in_archive)
-        if os.path.exists(extracted_path):
-            fasta_to_read = extracted_path
-        elif os.path.exists(local_archive):
-             # Extract if archive exists but file doesn't
-             run_command(f"tar -xzf {local_archive} -C data_cache")
-             fasta_to_read = extracted_path
-    
-    if not os.path.exists(fasta_to_read):
-        if case.url:
-            print(f"    -> Downloading from URL...")
-            run_command(f"wget -q --no-check-certificate '{case.url}' -O {local_archive}")
-            if local_archive.endswith((".tar.gz", ".tgz")):
-                run_command(f"tar -xzf {local_archive} -C data_cache")
-                if case.fasta_path_in_archive:
-                    fasta_to_read = os.path.join("data_cache", case.fasta_path_in_archive)
-        elif case.ncbi_query:
-            prepare_ncbi_dataset(case.ncbi_query, case.retmax, local_archive)
-            fasta_to_read = local_archive
+    # 1. Acquire Data (Download from Zenodo if missing)
+    if not os.path.exists(local_archive):
+        print(f"    -> Downloading frozen dataset from Zenodo...")
+        run_command(f"wget -q --no-check-certificate '{case.url}' -O {local_archive}")
 
-    # 2. Read and Parse
+    # 2. Extract/Select File
+    fasta_to_read = local_archive
+    if local_archive.endswith((".tar.gz", ".tgz")):
+        # Extract if needed
+        # Check if already extracted
+        if case.fasta_path_in_archive:
+            extracted_path = os.path.join("data_cache", case.fasta_path_in_archive)
+            if not os.path.exists(extracted_path):
+                print("    -> Extracting archive...")
+                run_command(f"tar -xzf {local_archive} -C data_cache")
+            fasta_to_read = extracted_path
+
+    # 3. Read and Parse
     full_db = read_fasta(fasta_to_read)
     
     tax_map = {}
@@ -240,7 +201,6 @@ def get_dataset_arrays(case: BenchmarkCase) -> Tuple[np.ndarray, np.ndarray]:
     raw_sequences, raw_labels = [], []
     for header, seq in full_db.items():
         if 'N' in seq: continue
-        # Resolve taxonomy source
         tax_source = tax_map.get(header.split()[0]) if tax_map else header
         if tax_source:
             species, _ = case.tax_parser(tax_source)
@@ -248,7 +208,7 @@ def get_dataset_arrays(case: BenchmarkCase) -> Tuple[np.ndarray, np.ndarray]:
                 raw_sequences.append(seq)
                 raw_labels.append(species)
 
-    # 3. PCR or Filtering
+    # 4. PCR or Filtering
     if case.prep_method == 'pcr':
         pcr_input = {i: seq for i, seq in enumerate(raw_sequences)}
         pcr_results = insilico_pcr(pcr_input, case.fwd_primer, case.rev_primer)
@@ -264,7 +224,7 @@ def get_dataset_arrays(case: BenchmarkCase) -> Tuple[np.ndarray, np.ndarray]:
                 sequences.append(s)
                 labels.append(l)
 
-    # 4. Balancing
+    # 5. Balancing
     if case.is_balanced_10:
         print("    -> Balancing dataset (max 10 per genus)...")
         sequences_np = np.array(sequences, dtype=object)
@@ -337,11 +297,11 @@ class UsearchWrapper:
 class TGAlignWrapper:
     def __init__(self, name="TGAlign"):
         self.name = name
-        # No 'tile' param needed; the model handles it automatically now.
+        # The TGA logic (tiling for fragments) is now AUTOMATIC inside the model
         self.model = TGAlignIndex(k=11, s=9, dim=4096, distance_threshold=0.8)
 
     def build(self, train_db: Dict[str, str]):
-        self.model.build(train_db) # No arguments
+        self.model.build(train_db)
 
     def search(self, queries: List[str]) -> List[str]:
         return self.model.search(queries)
@@ -380,32 +340,37 @@ def main():
     random.seed(42)
     np.random.seed(42)
 
-    # Define the 5 Benchmarks from the Paper
+    # Define the 5 Benchmarks (Pointing to Zenodo)
     cases = [
         BenchmarkCase(name="16S V4 (Greengenes)", prep_method='pcr', min_len=200, max_len=300,
                   archive_path="gg_16s_greengenes.tar.gz",
-                  url="https://greengenes.microbio.me/greengenes_release/gg_13_5/gg_13_8_otus.tar.gz",
+                  url="https://zenodo.org/records/17973054/files/gg_16s_greengenes.tar.gz?download=1",
                   fasta_path_in_archive="gg_13_8_otus/rep_set/99_otus.fasta",
                   taxonomy_path_in_archive="gg_13_8_otus/taxonomy/99_otu_taxonomy.txt",
                   fwd_primer="GTGCCAGCMGCCGCGGTAA", rev_primer="GGACTACHVGGGTWTCTAAT",
                   usearch_id=0.97, tax_parser=parse_greengenes_taxonomy),
 
         BenchmarkCase(name="ITS (Fungi)", prep_method='filter', min_len=200, max_len=1000,
-                  archive_path="ncbi_its_fungi.fasta", usearch_id=0.985,
-                  tax_parser=parse_ncbi_taxonomy,
-                  ncbi_query='"internal transcribed spacer"[All Fields] AND "Fungi"[Organism] AND 200:1000[Sequence Length]', retmax=5000),
+                  archive_path="ncbi_its_fungi.fasta", 
+                  url="https://zenodo.org/records/17973054/files/ncbi_its_fungi.fasta?download=1",
+                  usearch_id=0.985, tax_parser=parse_ncbi_taxonomy),
 
         BenchmarkCase(name="COI Full-Length", min_len=600, max_len=700,
-            archive_path="ncbi_coi.fasta", usearch_id=0.97, tax_parser=parse_ncbi_taxonomy,
-            ncbi_query='"cytochrome c oxidase subunit I"[All Fields] AND "Animalia"[Organism] AND 500:800[Sequence Length]'),
+            archive_path="ncbi_coi.fasta", 
+            url="https://zenodo.org/records/17973054/files/ncbi_coi.fasta?download=1",
+            usearch_id=0.97, tax_parser=parse_ncbi_taxonomy),
         
+        # Uses same file as Full-Length, just cached locally
         BenchmarkCase(name="COI Fragments", min_len=600, max_len=700,
-            archive_path="ncbi_coi.fasta", usearch_id=0.97, tax_parser=parse_ncbi_taxonomy,
-            ncbi_query=None), # Uses cached COI data
+            archive_path="ncbi_coi.fasta", 
+            url="https://zenodo.org/records/17973054/files/ncbi_coi.fasta?download=1",
+            usearch_id=0.97, tax_parser=parse_ncbi_taxonomy),
 
         BenchmarkCase(name="COI Balanced", min_len=600, max_len=700,
-            archive_path="ncbi_coi.fasta", usearch_id=0.97, tax_parser=parse_ncbi_taxonomy,
-            is_balanced_10=True, ncbi_query=None)
+            archive_path="ncbi_coi.fasta", 
+            url="https://zenodo.org/records/17973054/files/ncbi_coi.fasta?download=1",
+            usearch_id=0.97, tax_parser=parse_ncbi_taxonomy,
+            is_balanced_10=True)
     ]
 
     for case in cases:
@@ -437,13 +402,16 @@ def main():
                     queries.append(seq)
                     ground_truth.append(lbl)
 
+            # Define Competitors
+            # TGAlign is always parameter-free (auto-tiling)
             tg_wrapper = TGAlignWrapper()
             
+            # USEARCH needs Expert Mode for fragments
             usearch_wrapper = UsearchWrapper(
                 case.usearch_id, 
-                expert_mode=("Fragments" in case.name)
+                expert_mode=is_fragment_test
             )
-            
+
             comps = [tg_wrapper, usearch_wrapper]
 
             # Run Benchmarks
