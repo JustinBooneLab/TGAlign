@@ -79,7 +79,7 @@ def get_coi_data():
         import subprocess
         subprocess.run(f"wget -q '{url}' -O {path}", shell=True)
     
-    # Read FASTA
+    # Read FASTA & Parse Taxonomy
     raw_seqs, raw_labels = [], []
     with open(path, 'r') as f:
         header = None
@@ -87,22 +87,42 @@ def get_coi_data():
         for line in f:
             line = line.strip()
             if line.startswith(">"):
-                if header:
+                if header and "Unknown" not in header:
+                    # --- ROBUST PARSING LOGIC ---
+                    # Look for "Genus species" pattern in the header
                     parts = header.split()
-                    if len(parts) >= 2:
-                        label = f"{parts[0]} {parts[1]}"
+                    label = None
+                    for i, part in enumerate(parts):
+                        # Skip ID (index 0)
+                        if i == 0: continue 
+                        # Pattern: Capitalized Word + Lowercase Word (e.g. Panthera leo)
+                        if (i + 1 < len(parts) and 
+                            part[0].isupper() and 
+                            len(part) > 2 and 
+                            parts[i+1][0].islower()):
+                            label = f"{part} {parts[i+1]}"
+                            break
+                    
+                    if label:
                         raw_seqs.append("".join(seq))
                         raw_labels.append(label)
+                
                 header = line[1:]
                 seq = []
             else:
                 seq.append(line.upper())
         # Last sequence
-        if header:
-            parts = header.split()
-            if len(parts) >= 2:
-                raw_seqs.append("".join(seq))
-                raw_labels.append(f"{parts[0]} {parts[1]}")
+        if header and "Unknown" not in header:
+             parts = header.split()
+             label = None
+             for i, part in enumerate(parts):
+                if i == 0: continue
+                if (i + 1 < len(parts) and part[0].isupper() and len(part) > 2 and parts[i+1][0].islower()):
+                    label = f"{part} {parts[i+1]}"
+                    break
+             if label:
+                 raw_seqs.append("".join(seq))
+                 raw_labels.append(label)
 
     # FILTER RARE CLASSES (StratifiedKFold Requirement)
     from collections import Counter
@@ -113,6 +133,7 @@ def get_coi_data():
     print(f"Original: {len(raw_labels)}. Filtered: {len(valid_indices)} sequences.")
     
     return np.array(raw_seqs)[valid_indices], np.array(raw_labels)[valid_indices]
+    
 # =============================================================================
 # RUN ABLATION BENCHMARK
 # =============================================================================
