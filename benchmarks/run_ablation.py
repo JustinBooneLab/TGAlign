@@ -101,11 +101,13 @@ def get_coi_data():
             line = line.strip()
             if line.startswith(">"):
                 if header and "Unknown" not in header:
-                    # USE STRICT PARSER
-                    label = parse_ncbi_taxonomy(header)
-                    if label != "Unknown":
-                        raw_seqs.append("".join(seq))
-                        raw_labels.append(label)
+                    # Check for N
+                    full_seq = "".join(seq)
+                    if 'N' not in full_seq:
+                        label = parse_ncbi_taxonomy(header)
+                        if label != "Unknown":
+                            raw_seqs.append(full_seq)
+                            raw_labels.append(label)
                 header = line[1:]
                 seq = []
             else:
