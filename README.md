@@ -27,7 +27,6 @@ TGAlign was benchmarked against **USEARCH v12 (Global Alignment)** on 5 datasets
 | **COI Fragments** | Accuracy | 70.97% | **70.57%** | (Parity, p > 0.05) |
 | **COI Full** | Speed | 4.68 ms/query | **0.19 ms/query** | **~24x Faster** |
 
-> **Validation:** The experimental design and benchmarking protocols were vetted by **Robert Edgar** (developer of USEARCH/MUSCLE).
 
 ---
 
