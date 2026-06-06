@@ -39,7 +39,7 @@ TGAlign was benchmarked against **USEARCH v12 (Global Alignment)** on 5 datasets
 
 ### From Source
 ```bash
-git clone https://github.com/yourusername/tgalign.git
+git clone https://github.com/JustinBooneLab/TGAlign.git
 cd tgalign
 pip install .
 
