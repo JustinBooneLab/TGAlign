@@ -53,14 +53,14 @@ void create_syncmer_sketch_single(const std::string& sequence, int k, int s, int
                 min_smer_pos = j;
             }
         }
-
-        if (min_smer_pos == 0) {
-            uint64_t kmer_val = string_to_canonical_kmer(sequence.substr(i, k), k);
-            if (kmer_val != (uint64_t)-1) {
-                uint64_t hashed_kmer = hash64(kmer_val);
-                out_sketch[hashed_kmer % vector_dim]++;
+            // Strand-agnostic rule: accept if min s-mer is at start OR end
+            if (min_smer_pos == 0 || min_smer_pos == (k - s)) {
+                uint64_t kmer_val = string_to_canonical_kmer(sequence.substr(i, k), k);
+                if (kmer_val != (uint64_t)-1) {
+                    uint64_t hashed_kmer = hash64(kmer_val);
+                    out_sketch[hashed_kmer % vector_dim]++;
+                }
             }
-        }
     }
 
     double norm_sq = 0.0;

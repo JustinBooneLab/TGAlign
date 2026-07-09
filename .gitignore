@@ -1,0 +1,20 @@
+# Ignore binaries
+usearch12
+mmseqs
+vsearch*
+
+# Ignore data and temp directories
+data_cache/
+env/
+.venv/
+__pycache__/
+*/__pycache__/
+
+# Ignore build artifacts
+build/
+*.so
+*.o
+*.egg-info/
+
+# Ignore IDE settings
+.idea/

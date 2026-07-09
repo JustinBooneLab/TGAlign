@@ -51,17 +51,37 @@ except ImportError:
 USEARCH_BINARY = "usearch12"
 USEARCH_URL = "https://github.com/rcedgar/usearch12/releases/download/v12.0-beta1/usearch_linux_x86_12.0-beta"
 
+
 def ensure_usearch():
     """Checks for USEARCH binary in PATH or CWD, downloads if missing."""
     if shutil.which(USEARCH_BINARY):
         return os.path.abspath(shutil.which(USEARCH_BINARY))
-    
+
     if os.path.exists(USEARCH_BINARY):
         return os.path.abspath(USEARCH_BINARY)
 
     print(f"\n--- USEARCH binary not found. Downloading {USEARCH_BINARY}... ---")
+
+    # Check OS and Architecture
+    import platform
+    system = platform.system()
+    machine = platform.machine().lower()
+
+    base_url = "https://github.com/rcedgar/usearch12/releases/download/v12.0-beta1/"
+
+    if system == "Darwin":
+        if "arm" in machine or "aarch64" in machine:
+            # Apple Silicon (M1/M2/M3)
+            url = base_url + "usearch_osx_m_12.0-beta"
+        else:
+            # Intel Mac
+            url = base_url + "usearch_osx_x86_12.0-beta"
+    else:
+        # Linux (Assuming x86 for Colab/Standard servers)
+        url = base_url + "usearch_linux_x86_12.0-beta"
+
     try:
-        subprocess.run(f"wget -q {USEARCH_URL} -O {USEARCH_BINARY}", shell=True, check=True)
+        subprocess.run(f"curl -L -s -o {USEARCH_BINARY} {url}", shell=True, check=True)
         subprocess.run(f"chmod +x {USEARCH_BINARY}", shell=True, check=True)
         print("--- USEARCH downloaded successfully. ---\n")
         return os.path.abspath(USEARCH_BINARY)
@@ -172,7 +192,8 @@ def get_dataset_arrays(case: BenchmarkCase) -> Tuple[np.ndarray, np.ndarray]:
     # 1. Acquire Data (Download from Zenodo if missing)
     if not os.path.exists(local_archive):
         print(f"    -> Downloading frozen dataset from Zenodo...")
-        run_command(f"wget -q --no-check-certificate '{case.url}' -O {local_archive}")
+        # Replaced wget with curl -L for Mac/Linux compatibility
+        run_command(f"curl -L -s '{case.url}' -o {local_archive}")
 
     # 2. Extract/Select File
     fasta_to_read = local_archive
@@ -294,6 +315,91 @@ class UsearchWrapper:
     def cleanup(self):
         shutil.rmtree(self.temp_dir)
 
+
+class VsearchWrapper:
+    def __init__(self, id_threshold: float, expert_mode: bool = False):
+        self.name = f"VSEARCH ({'expert' if expert_mode else 'global'}, id={id_threshold})"
+        self.id_threshold = id_threshold
+        self.expert_mode = expert_mode
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "db.fasta")
+        self.executable = "vsearch"
+
+    def build(self, train_db: Dict[str, str]):
+        with open(self.db_path, "w") as f:
+            for seq_id, seq in train_db.items(): f.write(f">{seq_id}\n{seq}\n")
+
+    def search(self, query_sequences: List[str]) -> List[str]:
+        if not os.path.exists(self.db_path): return ["Unknown"] * len(query_sequences)
+        query_path = os.path.join(self.temp_dir, "q.fasta")
+        output_path = os.path.join(self.temp_dir, "hits.txt")
+        with open(query_path, "w") as f:
+            for i, seq in enumerate(query_sequences): f.write(f">q{i}\n{seq}\n")
+
+        cmd = [self.executable, '--usearch_global', query_path, '--db', self.db_path,
+               '--id', str(self.id_threshold), '--blast6out', output_path,
+               '--strand', 'both', '--maxaccepts', '1', '--maxrejects', '32', '--threads', '1']
+        if self.expert_mode: cmd.extend(['--query_cov', '0.9'])
+
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        hits = {f"q{i}": "Unknown" for i in range(len(query_sequences))}
+        if os.path.exists(output_path):
+            with open(output_path) as f:
+                for line in f:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 2: hits[parts[0]] = parts[1].rsplit('_', 1)[0]
+        return [hits[f"q{i}"] for i in range(len(query_sequences))]
+
+    def cleanup(self): shutil.rmtree(self.temp_dir)
+
+class MMseqs2Wrapper:
+    def __init__(self, min_seq_id: float = 0.97):
+        self.name = f"MMseqs2 (id={min_seq_id})"
+        self.min_seq_id = min_seq_id
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "refDB")
+        self.query_path = os.path.join(self.temp_dir, "queryDB")
+        self.result_path = os.path.join(self.temp_dir, "resultDB")
+        self.out_tsv = os.path.join(self.temp_dir, "results.tsv")
+        self.bin = "mmseqs"
+
+    def build(self, train_db: Dict[str, str]):
+        fasta_path = os.path.join(self.temp_dir, "ref.fasta")
+        with open(fasta_path, "w") as f:
+            for seq_id, seq in train_db.items(): f.write(f">{seq_id}\n{seq}\n")
+        subprocess.run([self.bin, "createdb", fasta_path, self.db_path], stdout=subprocess.DEVNULL)
+        subprocess.run([self.bin, "createindex", self.db_path, self.temp_dir], stdout=subprocess.DEVNULL)
+
+    def search(self, query_sequences: List[str]) -> List[str]:
+        if not os.path.exists(self.db_path): return ["Unknown"] * len(query_sequences)
+        q_fasta = os.path.join(self.temp_dir, "q.fasta")
+        with open(q_fasta, "w") as f:
+            for i, seq in enumerate(query_sequences): f.write(f">q{i}\n{seq}\n")
+
+        subprocess.run([self.bin, "createdb", q_fasta, self.query_path], stdout=subprocess.DEVNULL)
+
+        search_cmd = [self.bin, "search", self.query_path, self.db_path, self.result_path, self.temp_dir,
+            "--min-seq-id", str(self.min_seq_id), "-s", "7", "--search-type", "3", "--threads", "1"]
+        subprocess.run(search_cmd, stdout=subprocess.DEVNULL)
+
+        convert_cmd = [self.bin, "convertalis", self.query_path, self.db_path, self.result_path, self.out_tsv, "--format-output", "query,target"]
+        subprocess.run(convert_cmd, stdout=subprocess.DEVNULL)
+
+        hits = {f"q{i}": "Unknown" for i in range(len(query_sequences))}
+        try:
+            with open(self.out_tsv) as f:
+                for line in f:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 2:
+                        q_id = parts[0]; target_id = parts[1].rsplit('_', 1)[0]
+                        if hits[q_id] == "Unknown": hits[q_id] = target_id
+        except FileNotFoundError: pass
+
+        return [hits[f"q{i}"] for i in range(len(query_sequences))]
+
+    def cleanup(self): shutil.rmtree(self.temp_dir)
+
 class TGAlignWrapper:
     def __init__(self, name="TGAlign"):
         self.name = name
@@ -317,10 +423,12 @@ def print_summary(results: Dict[str, Dict[str, List[float]]], title: str):
     print(f"\n=== RESULTS: {title} ===")
     models = sorted(results.keys())
     metrics = ["Accuracy", "Macro F1", "Time(Build, s)", "Time(Query, ms)"]
-    
+
     # Print Header
-    print(f"{'Metric':<20} | " + " | ".join([f"{m:<25}" for m in models]))
-    print("-" * 80)
+    header = f"{'Metric':<20} | " + " | ".join([f"{m:<25}" for m in models])
+    print("-" * len(header))
+    print(header)
+    print("-" * len(header))
 
     for metric in metrics:
         row = f"{metric:<20}"
@@ -329,12 +437,23 @@ def print_summary(results: Dict[str, Dict[str, List[float]]], title: str):
             row += f" | {np.mean(vals):.4f} +/- {np.std(vals):.4f}"
         print(row)
 
-    # T-Test
-    tg = next((m for m in models if "TGAlign" in m), None)
-    us = next((m for m in models if "USEARCH" in m), None)
-    if tg and us:
-        p = ttest_rel(results[tg]["Accuracy"], results[us]["Accuracy"]).pvalue
-        print(f"\nPaired T-Test ({tg} vs {us}): p = {p:.5f}")
+    print("-" * len(header))
+
+    # Statistical Testing: TGAlign vs ALL others
+    tg_model = next((m for m in models if "TGAlign" in m), None)
+
+    if tg_model:
+        print("\n--- Paired T-Tests (Accuracy) ---")
+        for comp_model in models:
+            if comp_model != tg_model:
+                try:
+                    acc_tg = results[tg_model]["Accuracy"]
+                    acc_comp = results[comp_model]["Accuracy"]
+                    p_val = ttest_rel(acc_tg, acc_comp).pvalue
+                    print(f"TGAlign vs {comp_model:<25}: p = {p_val:.5f}")
+                except Exception as e:
+                    print(f"Could not calculate p-value for {comp_model}: {e}")
+    print("================================================================================\n")
 
 def main():
     random.seed(42)
@@ -403,22 +522,12 @@ def main():
                     ground_truth.append(lbl)
 
             # Define Competitors
-            # TGAlign is always parameter-free (auto-tiling)
             tg_wrapper = TGAlignWrapper()
-            
-            if is_fragment_test:
-                # For Fragments, we compare against BOTH Expert and Standard
-                comps = [
-                    tg_wrapper,
-                    UsearchWrapper(case.usearch_id, expert_mode=True),  # The "Expert"
-                    UsearchWrapper(case.usearch_id, expert_mode=False)  # The "Naive"
-                ]
-            else:
-                # For standard datasets, we just use standard global alignment
-                comps = [
-                    tg_wrapper,
-                    UsearchWrapper(case.usearch_id, expert_mode=False)
-                ]
+            usearch_wrapper = UsearchWrapper(case.usearch_id, expert_mode=is_fragment_test)
+            vsearch_wrapper = VsearchWrapper(case.usearch_id, expert_mode=is_fragment_test)
+            mmseqs_wrapper = MMseqs2Wrapper(min_seq_id=case.usearch_id)
+
+            comps = [tg_wrapper, usearch_wrapper, vsearch_wrapper, mmseqs_wrapper]
 
             # Run Benchmarks
             for model in comps:

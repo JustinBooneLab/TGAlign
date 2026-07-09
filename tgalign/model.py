@@ -34,21 +34,19 @@ class TGAlignIndex:
     def build(self, reference_db: Dict[str, str]):
         """
         Builds the FAISS index from a dictionary of {seq_id: sequence}.
-        
+
         Task-Geometry Alignment (TGA) Logic:
-        - If a sequence is longer than the window size (350bp), it is automatically 
+        - If a sequence is longer than the window size (350bp), it is automatically
           decomposed into overlapping windows. This ensures that short query fragments
           can match against the corresponding local region of a long reference.
-        - If a sequence is shorter than 350bp (e.g., V4 Amplicons), it is sketched 
+        - If a sequence is shorter than 350bp (e.g., V4 Amplicons), it is sketched
           as a single unit.
-        
+
         Args:
             reference_db: Dict mapping ID to DNA sequence.
         """
-        # Heuristic for IVFFlat clusters: ~sqrt(N) but bounded
-        nlist = max(1, min(len(reference_db) * 5 // 40, 200))
-        quantizer = faiss.IndexFlatL2(self.vector_dim)
-        self.index = faiss.IndexIVFFlat(quantizer, self.vector_dim, nlist)
+        # Exact Euclidean L2 search
+        self.index = faiss.IndexFlatL2(self.vector_dim)
 
         sequences_to_sketch = []
         current_idx = 0
@@ -58,7 +56,7 @@ class TGAlignIndex:
             if len(seq) > self.window_size:
                 # Long Reference -> Tile it
                 for i in range(0, len(seq) - self.window_size + 1, self.window_step):
-                    sequences_to_sketch.append(seq[i : i + self.window_size])
+                    sequences_to_sketch.append(seq[i: i + self.window_size])
                     self.label_map[current_idx] = ref_id
                     current_idx += 1
             else:
@@ -71,9 +69,7 @@ class TGAlignIndex:
             raise ValueError("No valid sequences found to index.")
 
         sketches = self._sketch_batch(sequences_to_sketch)
-        
-        # Train and Add to FAISS
-        self.index.train(sketches)
+
         self.index.add(sketches)
 
     def search(self, query_sequences: List[str]) -> List[str]:

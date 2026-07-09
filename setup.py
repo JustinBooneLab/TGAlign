@@ -18,7 +18,8 @@ ext_modules = [
             str(get_pybind_include()), 
             str(get_pybind_include()) + '/user' 
         ],
-        language='c++'
+        language='c++',
+        extra_compile_args=['-std=c++17']
     ),
 ]
 
