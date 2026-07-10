@@ -323,7 +323,35 @@ class VsearchWrapper:
         self.expert_mode = expert_mode
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "db.fasta")
-        self.executable = "vsearch"
+
+        # Binary location
+        self.executable = os.path.abspath("vsearch")
+
+        if not os.path.exists(self.executable):
+            print("\n--- VSEARCH binary not found. Downloading... ---")
+            import platform
+            system = platform.system()
+            machine = platform.machine().lower()
+
+            if system == "Darwin":
+                if "arm" in machine or "aarch64" in machine:
+                    url = "https://github.com/torognes/vsearch/releases/download/v2.28.1/vsearch-2.28.1-macos-aarch64.tar.gz"
+                else:
+                    url = "https://github.com/torognes/vsearch/releases/download/v2.28.1/vsearch-2.28.1-macos-x86_64.tar.gz"
+            else:
+                # Linux (Colab)
+                url = "https://github.com/torognes/vsearch/releases/download/v2.28.1/vsearch-2.28.1-linux-x86_64.tar.gz"
+
+            try:
+                subprocess.run(f"curl -L -s -o vsearch.tar.gz {url}", shell=True, check=True)
+                subprocess.run("tar -xzf vsearch.tar.gz", shell=True, check=True)
+                # Find the extracted binary and move it to the root directory
+                subprocess.run("cp vsearch-*/bin/vsearch ./vsearch", shell=True, check=True)
+                subprocess.run("chmod +x vsearch", shell=True, check=True)
+                print("--- VSEARCH downloaded successfully. ---\n")
+            except subprocess.CalledProcessError:
+                print("ERROR: Failed to download VSEARCH.")
+                sys.exit(1)
 
     def build(self, train_db: Dict[str, str]):
         with open(self.db_path, "w") as f:
@@ -351,7 +379,9 @@ class VsearchWrapper:
                     if len(parts) >= 2: hits[parts[0]] = parts[1].rsplit('_', 1)[0]
         return [hits[f"q{i}"] for i in range(len(query_sequences))]
 
-    def cleanup(self): shutil.rmtree(self.temp_dir)
+    def cleanup(self):
+        shutil.rmtree(self.temp_dir)
+
 
 class MMseqs2Wrapper:
     def __init__(self, min_seq_id: float = 0.97):
@@ -362,7 +392,35 @@ class MMseqs2Wrapper:
         self.query_path = os.path.join(self.temp_dir, "queryDB")
         self.result_path = os.path.join(self.temp_dir, "resultDB")
         self.out_tsv = os.path.join(self.temp_dir, "results.tsv")
-        self.bin = "mmseqs"
+
+        # 1. Check if MMseqs2 is already installed system-wide (e.g., via Homebrew)
+        if shutil.which("mmseqs"):
+            self.bin = os.path.abspath(shutil.which("mmseqs"))
+        else:
+            # 2. If not found, try to use/download the local binary
+            self.bin = os.path.abspath("mmseqs/bin/mmseqs")
+
+            if not os.path.exists(self.bin):
+                print("\n--- MMseqs2 binary not found in PATH or locally. ---")
+                import platform
+                system = platform.system()
+
+                if system == "Darwin":
+                    print("ERROR: On macOS, MMseqs2 cannot be auto-downloaded securely.")
+                    print("Please install it manually using Homebrew:")
+                    print("    brew install mmseqs2")
+                    sys.exit(1)
+                else:
+                    print("Downloading Linux binary...")
+                    url = "https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz"
+                    try:
+                        subprocess.run(f"curl -L -s -o mmseqs.tar.gz {url}", shell=True, check=True)
+                        subprocess.run("tar -xzf mmseqs.tar.gz", shell=True, check=True)
+                        print("--- MMseqs2 downloaded successfully. ---\n")
+                        self.bin = os.path.abspath("mmseqs/bin/mmseqs")
+                    except subprocess.CalledProcessError:
+                        print("ERROR: Failed to download MMseqs2.")
+                        sys.exit(1)
 
     def build(self, train_db: Dict[str, str]):
         fasta_path = os.path.join(self.temp_dir, "ref.fasta")
@@ -380,10 +438,11 @@ class MMseqs2Wrapper:
         subprocess.run([self.bin, "createdb", q_fasta, self.query_path], stdout=subprocess.DEVNULL)
 
         search_cmd = [self.bin, "search", self.query_path, self.db_path, self.result_path, self.temp_dir,
-            "--min-seq-id", str(self.min_seq_id), "-s", "7", "--search-type", "3", "--threads", "1"]
+                      "--min-seq-id", str(self.min_seq_id), "-s", "7", "--search-type", "3", "--threads", "1"]
         subprocess.run(search_cmd, stdout=subprocess.DEVNULL)
 
-        convert_cmd = [self.bin, "convertalis", self.query_path, self.db_path, self.result_path, self.out_tsv, "--format-output", "query,target"]
+        convert_cmd = [self.bin, "convertalis", self.query_path, self.db_path, self.result_path, self.out_tsv,
+                       "--format-output", "query,target"]
         subprocess.run(convert_cmd, stdout=subprocess.DEVNULL)
 
         hits = {f"q{i}": "Unknown" for i in range(len(query_sequences))}
@@ -392,13 +451,17 @@ class MMseqs2Wrapper:
                 for line in f:
                     parts = line.strip().split('\t')
                     if len(parts) >= 2:
-                        q_id = parts[0]; target_id = parts[1].rsplit('_', 1)[0]
+                        q_id = parts[0];
+                        target_id = parts[1].rsplit('_', 1)[0]
                         if hits[q_id] == "Unknown": hits[q_id] = target_id
-        except FileNotFoundError: pass
+        except FileNotFoundError:
+            pass
 
         return [hits[f"q{i}"] for i in range(len(query_sequences))]
 
-    def cleanup(self): shutil.rmtree(self.temp_dir)
+    def cleanup(self):
+        shutil.rmtree(self.temp_dir)
+
 
 class TGAlignWrapper:
     def __init__(self, name="TGAlign"):

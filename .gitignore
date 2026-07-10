@@ -1,7 +1,9 @@
 # Ignore binaries
-usearch12
-mmseqs
-vsearch*
+# Ignore downloaded binaries and archives
+mmseqs.tar.gz
+vsearch.tar.gz
+vsearch-*/
+mmseqs/
 
 # Ignore data and temp directories
 data_cache/
