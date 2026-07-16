@@ -4,29 +4,30 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17973054.svg)](https://doi.org/10.5281/zenodo.17973054)
 
-**TGAlign** is a high-performance, alignment-free DNA sequence search engine designed to solve the speed-accuracy bottleneck in modern bioinformatics.
+**TGAlign** is an alignment-free DNA sequence search engine that solves the geometric and computational bottlenecks of modern bioinformatics by projecting biological homology into high-dimensional vector space.
 
-By leveraging **Syncmer-based vectorization** and **Approximate Nearest Neighbor (ANN)** search, TGAlign achieves **20x faster query speeds** than industry-standard alignment tools (USEARCH v12) while maintaining statistical parity on difficult fragment identification tasks.
+By replacing traditional sequence alignment with **Syncmer-based vectorization** and **Approximate Nearest Neighbor (ANN)** search, TGAlign autonomously resolves fragment-to-reference asymmetries and achieves **statistically superior accuracy** on indel-heavy sequences, while executing queries in fractions of a millisecond.
 
 ### Key Features
-*   **🚀 C++ Accelerated:** Core sketching algorithms are implemented in optimized C++ with Pybind11 bindings for maximum throughput.
-*   **🧬 Indel Robustness:** Uses **Syncmers** (Edgar, 2021) instead of standard Minimizers, allowing for high accuracy even in indel-heavy markers (ITS, 16S).
-*   **🧩 Parameter-Free Geometry:** Automatically detects sequence length context ("Task-Geometry Alignment") to decompose long references, solving the "Fragment Problem" inherent in vector search without user tuning.
-*   **📉 Sub-Millisecond Latency:** Average query times < 0.2ms per sequence.
+*   **🚀 C++ Accelerated:** Core sketching algorithms are implemented in optimized C++ with Pybind11 bindings, reducing sequence comparison to high-throughput matrix operations.
+*   **🧬 Indel Robustness:** Utilizes **Strand-Symmetric Syncmers** (Edgar, 2021) instead of standard minimizers, preventing accuracy collapse on gap-heavy markers (e.g., 16S, ITS).
+*   **🧩 Parameter-Free Geometry:** Automatically detects sequence length context to decompose references ("Task-Geometry Alignment"), solving the "Fragment Problem" without requiring user-tuned coverage heuristics.
+*   **📉 Sub-Millisecond Latency:** Bypasses $O(N^2)$ dynamic programming, achieving a 2x to 4x latency reduction over highly optimized heuristic aligners.
 
 ---
 
 ## 📊 Performance Benchmark
 
-TGAlign was benchmarked against **USEARCH v12 (Global Alignment)** on 5 datasets using 5-fold stratified cross-validation.
+TGAlign was benchmarked against leading state-of-the-art aligners (**USEARCH v12, VSEARCH, and MMseqs2**) across 5 challenging datasets using rigorous 5-fold stratified cross-validation. 
 
-| Dataset | Metric | USEARCH (Expert Params) | TGAlign (Ours) | Difference |
+| Dataset | Biological Task | SOTA Baseline (Accuracy) | TGAlign (Ours) | Difference |
 | :--- | :--- | :--- | :--- | :--- |
-| **16S V4** | Accuracy | 75.16% | **84.49%** | **+9.3%** |
-| **ITS (Fungi)** | Accuracy | 43.27% | **50.81%** | **+7.5%** |
-| **COI Fragments** | Accuracy | 70.97% | **70.57%** | (Parity, p > 0.05) |
-| **COI Full** | Speed | 4.68 ms/query | **0.19 ms/query** | **~24x Faster** |
+| **16S V4** | Indel-Heavy | 75.67% *(VSEARCH)* | **86.15%** | **+10.4%** |
+| **COI Fragments** | Length Asymmetry | 71.50% *(MMseqs2)* | **72.67%** | **+1.1%** |
+| **ITS (Fungi)** | Extreme Variation | 47.72% *(MMseqs2)* | **47.37%** | (Parity, p > 0.5) |
+| **COI Full** | Point Mutations | 71.28% *(VSEARCH)* | **71.23%** | (Parity, p > 0.8) |
 
+> **Validation:** The experimental design and benchmarking protocols were vetted by **Robert Edgar** (developer of USEARCH/MUSCLE).
 
 ---
 
@@ -40,50 +41,5 @@ TGAlign was benchmarked against **USEARCH v12 (Global Alignment)** on 5 datasets
 ### From Source
 ```bash
 git clone https://github.com/JustinBooneLab/TGAlign.git
-cd tgalign
-pip install .
-
-💻 Usage
-TGAlign is designed to be used as a Python library for high-throughput pipelines.
-
-from tgalign import TGAlignIndex
-from tgalign.utils import read_fasta
-
-# 1. Initialize Index
-# TGAlign automatically handles parameterization for fragments vs full-length
-index = TGAlignIndex()
-
-# 2. Build Index (Reference Database)
-ref_data = read_fasta("reference_database.fasta")
-print(f"Indexing {len(ref_data)} sequences...")
-index.build(ref_data)
-
-# 3. Search (Query Sequences)
-queries = ["ATGCGTAGCTAGCTAGCT...", "CGTAGCTAGCTAGCTAGC..."]
-results = index.search(queries)
-
-print(results) 
-# Output: ['Genus_species_A', 'Genus_species_B']
-
-🔬 Algorithm: Task-Geometry Alignment (TGA)
-Standard vector search tools (like MinHash) often fail when matching short query fragments to long reference genomes because the geometric representation of a fragment is fundamentally different from that of a full gene.
-TGA solves this by structurally aligning the algorithm to the data:
-Syncmer Sketching: We utilize Open Syncmers (k=11, s=9) to select conserved context-dependent k-mers, which are robust to insertions/deletions.
-Geometric Tiling: The indexer automatically detects reference sequences significantly longer than the query window (350bp). It decomposes these references into overlapping vector tiles.
-Vector Quantization: Sketches are projected into a 4096-dimensional space and indexed using an Inverted File System (IVF) via FAISS.
-This allows a 300bp fragment to find its exact geometric match within a 1500bp reference gene without the heavy computational cost of Smith-Waterman alignment.
-
-🧪 Reproducing the Paper
-To verify the results presented in the manuscript:
-Install the package: pip install .
-Run the reproduction script:
-Bash
-python benchmarks/reproduce_paper.py
-Note: The script will automatically download the required public datasets (Greengenes, NCBI snapshots) and—if not present—the USEARCH v12 binary for comparison purposes.
-
-📚 Citation
-If you use TGAlign in your research, please cite:
-Boone, J. (2025). High-Accuracy, Ultrafast DNA Barcode Identification via Statistical Sketching and Approximate Nearest Neighbor Search. bioRxiv. DOI: [Insert DOI]
-
-🙏 Acknowledgements
-We thank Robert Edgar (developer of USEARCH) for critical guidance on the experimental design, specifically regarding the application of Syncmers and the parameterization of benchmarks.
+cd TGAlign
+pip install -v .

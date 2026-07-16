@@ -1,18 +1,13 @@
 import numpy as np
 import faiss
 from typing import List, Dict, Tuple
-from . import _tgalign_cpp # Imports the compiled C++ module
+from . import _tgalign_cpp  # Imports the compiled C++ module
+
 
 class TGAlignIndex:
     def __init__(self, k: int = 11, s: int = 9, dim: int = 4096, distance_threshold: float = 0.8):
         """
         Initializes the TGAlign Indexer.
-        
-        Args:
-            k (int): K-mer size for Syncmers.
-            s (int): Sub-k-mer size (s < k).
-            dim (int): Vector dimension for hashing.
-            distance_threshold (float): Max L2 distance to accept a hit.
         """
         self.k = k
         self.s = s
@@ -20,8 +15,8 @@ class TGAlignIndex:
         self.threshold = distance_threshold
         self.index = None
         self.label_map = {}
-        
-        # TGA Tiling Parameters (Fixed architectural constants)
+
+        # TGA Tiling Parameters
         self.window_size = 350
         self.window_step = 50
 
@@ -33,20 +28,17 @@ class TGAlignIndex:
 
     def build(self, reference_db: Dict[str, str]):
         """
-        Builds the FAISS index from a dictionary of {seq_id: sequence}.
-
-        Task-Geometry Alignment (TGA) Logic:
-        - If a sequence is longer than the window size (350bp), it is automatically
-          decomposed into overlapping windows. This ensures that short query fragments
-          can match against the corresponding local region of a long reference.
-        - If a sequence is shorter than 350bp (e.g., V4 Amplicons), it is sketched
-          as a single unit.
-
-        Args:
-            reference_db: Dict mapping ID to DNA sequence.
+        Builds the FAISS Approximate Nearest Neighbor (ANN) index.
         """
-        # Exact Euclidean L2 search
-        self.index = faiss.IndexFlatL2(self.vector_dim)
+        # Heuristic for IVFFlat clusters: ~sqrt(N) but bounded
+        nlist = max(1, min(len(reference_db) * 5 // 40, 200))
+        quantizer = faiss.IndexFlatL2(self.vector_dim)
+
+        # We use IndexIVFFlat for high-speed Approximate Nearest Neighbor (ANN) search.
+        self.index = faiss.IndexIVFFlat(quantizer, self.vector_dim, nlist)
+
+        # Explicitly set nprobe to check multiple clusters for higher accuracy
+        self.index.nprobe = min(nlist, 5)
 
         sequences_to_sketch = []
         current_idx = 0
@@ -54,13 +46,11 @@ class TGAlignIndex:
         for ref_id, seq in reference_db.items():
             # AUTOMATIC TGA LOGIC
             if len(seq) > self.window_size:
-                # Long Reference -> Tile it
                 for i in range(0, len(seq) - self.window_size + 1, self.window_step):
                     sequences_to_sketch.append(seq[i: i + self.window_size])
                     self.label_map[current_idx] = ref_id
                     current_idx += 1
             else:
-                # Short Reference -> Sketch whole
                 sequences_to_sketch.append(seq)
                 self.label_map[current_idx] = ref_id
                 current_idx += 1
@@ -70,6 +60,8 @@ class TGAlignIndex:
 
         sketches = self._sketch_batch(sequences_to_sketch)
 
+        # Train the quantizer and add the vectors
+        self.index.train(sketches)
         self.index.add(sketches)
 
     def search(self, query_sequences: List[str]) -> List[str]:
@@ -88,8 +80,6 @@ class TGAlignIndex:
             dist = distances[i][0]
             if idx != -1 and dist < self.threshold:
                 full_id = self.label_map[idx]
-                # Clean ID if it contains tiling suffixes or extra info
-                # Assumes standard ID format "Genus_species_Accession"
                 results.append(full_id.rsplit('_', 1)[0] if '_' in full_id else full_id)
             else:
                 results.append("Unknown")

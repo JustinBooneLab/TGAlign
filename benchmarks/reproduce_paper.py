@@ -571,18 +571,26 @@ def main():
             
             # Prepare Data
             train_db = {f"{l.replace(' ','_')}_{i}": s for i, (s, l) in enumerate(zip(sequences[train_idx], labels[train_idx]))}
-            
-            # Prepare Queries (Simulate fragments if needed)
+
+            # Prepare Queries (Simulate fragments and mixed orientations)
             queries, ground_truth = [], []
-            for seq, lbl in zip(sequences[test_idx], labels[test_idx]):
-                lbl = lbl.replace(' ', '_')
+            for i, (seq, lbl) in enumerate(zip(sequences[test_idx], labels[test_idx])):
+                lbl_clean = lbl.replace(' ', '_')
+
+                # Extract Fragment
                 if is_fragment_test and len(seq) > 300:
                     start = random.randint(0, len(seq) - 300)
-                    queries.append(seq[start : start + 300])
-                    ground_truth.append(lbl)
+                    query_seq = seq[start: start + 300]
                 else:
-                    queries.append(seq)
-                    ground_truth.append(lbl)
+                    query_seq = seq
+
+                # Explicitly Reverse-Complement 50% of queries to test strand-symmetry
+                if i % 2 == 0:
+                    rc_map = str.maketrans("ACGT", "TGCA")
+                    query_seq = query_seq.translate(rc_map)[::-1]
+
+                queries.append(query_seq)
+                ground_truth.append(lbl_clean)
 
             # Define Competitors
             tg_wrapper = TGAlignWrapper()
