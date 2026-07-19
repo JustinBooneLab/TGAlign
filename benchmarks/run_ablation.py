@@ -4,11 +4,13 @@ Ablation Study: Validating the TGA Architectural Heuristic
 
 import os
 import gzip
+import sys
 import random
 import numpy as np
 from collections import defaultdict, Counter
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
+
 
 try:
     from tgalign import TGAlignIndex
@@ -118,6 +120,8 @@ class NaiveTGAlignIndex(TGAlignIndex):
         sketches = self._sketch_batch(sequences_to_sketch)
         self.index.train(sketches)
         self.index.add(sketches)
+        self.index.nprobe = min(nlist, 5)
+
 
 # =============================================================================
 # 3. RUN BENCHMARK
